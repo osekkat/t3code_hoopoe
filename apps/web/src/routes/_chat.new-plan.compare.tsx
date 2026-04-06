@@ -31,7 +31,7 @@ function PlanComparisonThreadPane(props: {
   if (!thread) {
     return (
       <div
-        className="flex min-h-[32rem] flex-col rounded-3xl border border-border/80 bg-card/60 p-6"
+        className="flex h-full min-h-[32rem] flex-col rounded-3xl border border-border/80 bg-card/60 p-6"
         data-testid="plan-compare-loading-pane"
       >
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
@@ -44,7 +44,7 @@ function PlanComparisonThreadPane(props: {
 
   return (
     <div
-      className="min-h-[32rem] overflow-hidden rounded-3xl border border-border/80 bg-background shadow-[0_20px_60px_-36px_color-mix(in_srgb,var(--foreground)_18%,transparent)]"
+      className="flex h-full min-h-[32rem] min-w-0 flex-col overflow-hidden rounded-3xl border border-border/80 bg-background shadow-[0_20px_60px_-36px_color-mix(in_srgb,var(--foreground)_18%,transparent)]"
       data-testid="plan-compare-chat-pane"
     >
       <ChatView threadId={thread.id} viewMode="comparison" />
@@ -56,7 +56,7 @@ function PlanComparisonErrorPane(props: { pane: PlanComparisonPaneDescriptor }) 
   return (
     <Alert
       variant="error"
-      className="min-h-[32rem] content-start rounded-3xl p-6"
+      className="flex h-full min-h-[32rem] content-start flex-col rounded-3xl p-6"
       data-testid="plan-compare-error-pane"
     >
       <AlertCircleIcon />
@@ -105,7 +105,7 @@ function NewPlanCompareRouteView() {
 
   return (
     <NewPlanScreenLayout title="Plan comparison">
-      <div className="mx-auto flex min-h-full w-full max-w-[1800px] flex-col px-4 py-6 sm:px-6">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-[1800px] flex-col overflow-hidden px-4 py-6 sm:px-6">
         <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
@@ -142,13 +142,16 @@ function NewPlanCompareRouteView() {
           </Alert>
         ) : (
           <div
-            className={cn("grid min-h-0 flex-1 gap-4", getComparisonGridClassName(panes.length))}
+            className={cn(
+              "grid min-h-0 flex-1 auto-rows-fr gap-4 overflow-hidden",
+              getComparisonGridClassName(panes.length),
+            )}
             data-testid="plan-compare-grid"
           >
             {panes.map((pane) => (
               <div
                 key={pane.threadId ?? `${pane.provider}:${pane.model}:${pane.state}`}
-                className="min-h-0"
+                className="min-h-0 overflow-hidden"
                 data-testid="plan-compare-item"
               >
                 {pane.state === "error" ? (
