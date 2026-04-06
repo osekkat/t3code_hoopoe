@@ -1,7 +1,6 @@
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
-  type ClaudeCodeEffort,
   type MessageId,
   type ModelSelection,
   type ProjectScript,
@@ -9,6 +8,7 @@ import {
   type ProjectEntry,
   type ProjectId,
   type ProviderApprovalDecision,
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ServerProvider,
@@ -20,7 +20,7 @@ import {
   RuntimeMode,
   TerminalOpenInput,
 } from "@t3tools/contracts";
-import { applyClaudePromptEffortPrefix, normalizeModelSlug } from "@t3tools/shared/model";
+import { normalizeModelSlug } from "@t3tools/shared/model";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -118,7 +118,7 @@ import { SidebarTrigger } from "./ui/sidebar";
 import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
-  getProviderModelCapabilities,
+  getProviderModelName,
   getProviderModels,
   resolveSelectableProvider,
 } from "../providerModels";
@@ -198,6 +198,7 @@ import {
   useServerKeybindings,
 } from "~/rpc/serverState";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
+import { formatOutgoingPrompt } from "../outgoingPrompt";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -283,19 +284,6 @@ function useThreadPlanCatalog(threadIds: readonly ThreadId[]): ThreadPlanCatalog
   return useStore(selector);
 }
 
-function formatOutgoingPrompt(params: {
-  provider: ProviderKind;
-  model: string | null;
-  models: ReadonlyArray<ServerProvider["models"][number]>;
-  effort: string | null;
-  text: string;
-}): string {
-  const caps = getProviderModelCapabilities(params.models, params.model, params.provider);
-  if (params.effort && caps.promptInjectedEffortLevels.includes(params.effort)) {
-    return applyClaudePromptEffortPrefix(params.text, params.effort as ClaudeCodeEffort | null);
-  }
-  return params.text;
-}
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
@@ -330,6 +318,7 @@ const terminalContextIdListsEqual = (
 
 interface ChatViewProps {
   threadId: ThreadId;
+  viewMode?: "default" | "comparison";
 }
 
 interface TerminalLaunchContext {
@@ -574,7 +563,31 @@ function PersistentThreadTerminalDrawer({
   );
 }
 
-export default function ChatView({ threadId }: ChatViewProps) {
+function formatComparisonSessionStatusLabel(
+  session: Thread["session"] | null | undefined,
+): string | null {
+  switch (session?.orchestrationStatus) {
+    case "starting":
+      return "Starting";
+    case "running":
+      return "Running";
+    case "ready":
+      return "Ready";
+    case "interrupted":
+      return "Interrupted";
+    case "stopped":
+      return "Stopped";
+    case "error":
+      return "Error";
+    case "idle":
+      return "Idle";
+    default:
+      return null;
+  }
+}
+
+export default function ChatView({ threadId, viewMode = "default" }: ChatViewProps) {
+  const isComparisonView = viewMode === "comparison";
   const serverThread = useThreadById(threadId);
   const setStoreThreadError = useStore((store) => store.setError);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
@@ -836,10 +849,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
-  const runtimeMode =
-    composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
-  const interactionMode =
-    composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
+  const runtimeMode = isComparisonView
+    ? (activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE)
+    : (composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE);
+  const interactionMode = isComparisonView
+    ? (activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE)
+    : (composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE);
   const isServerThread = serverThread !== undefined;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
@@ -989,9 +1004,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const threadProvider =
     activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
   const hasThreadStarted = threadHasStarted(activeThread);
-  const lockedProvider: ProviderKind | null = hasThreadStarted
-    ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
-    : null;
+  const lockedProvider: ProviderKind | null =
+    hasThreadStarted || isComparisonView
+      ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
+      : null;
   const serverConfig = useServerConfig();
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
   const unlockedSelectedProvider = resolveSelectableProvider(
@@ -999,14 +1015,19 @@ export default function ChatView({ threadId }: ChatViewProps) {
     selectedProviderByThreadId ?? threadProvider ?? "codex",
   );
   const selectedProvider: ProviderKind = lockedProvider ?? unlockedSelectedProvider;
-  const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
-    threadId,
-    providers: providerStatuses,
-    selectedProvider,
-    threadModelSelection: activeThread?.modelSelection,
-    projectModelSelection: activeProject?.defaultModelSelection,
-    settings,
-  });
+  const { modelOptions: composerModelOptions, selectedModel: derivedSelectedModel } =
+    useEffectiveComposerModelState({
+      threadId,
+      providers: providerStatuses,
+      selectedProvider,
+      threadModelSelection: activeThread?.modelSelection,
+      projectModelSelection: activeProject?.defaultModelSelection,
+      settings,
+    });
+  const pinnedComparisonModelSelection = isComparisonView
+    ? (activeThread?.modelSelection ?? null)
+    : null;
+  const selectedModel = pinnedComparisonModelSelection?.model ?? derivedSelectedModel;
   const selectedProviderModels = getProviderModels(providerStatuses, selectedProvider);
   const composerProviderState = useMemo(
     () =>
@@ -1019,8 +1040,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }),
     [composerModelOptions, prompt, selectedModel, selectedProvider, selectedProviderModels],
   );
-  const selectedPromptEffort = composerProviderState.promptEffort;
-  const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
+  const selectedModelOptionsForDispatch =
+    pinnedComparisonModelSelection?.options ?? composerProviderState.modelOptionsForDispatch;
   const selectedModelSelection = useMemo<ModelSelection>(
     () => ({
       provider: selectedProvider,
@@ -1030,6 +1051,19 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [selectedModel, selectedModelOptionsForDispatch, selectedProvider],
   );
   const selectedModelForPicker = selectedModel;
+  const comparisonProviderLabel = isComparisonView
+    ? PROVIDER_DISPLAY_NAMES[selectedModelSelection.provider]
+    : null;
+  const comparisonModelLabel = isComparisonView
+    ? getProviderModelName(
+        selectedProviderModels,
+        selectedModelSelection.model,
+        selectedModelSelection.provider,
+      )
+    : null;
+  const comparisonStatusLabel = isComparisonView
+    ? formatComparisonSessionStatusLabel(activeThread?.session)
+    : null;
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(
@@ -1455,6 +1489,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }));
     }
 
+    if (isComparisonView) {
+      return [];
+    }
+
     if (composerTrigger.kind === "slash-command") {
       const slashCommandItems = [
         {
@@ -1504,7 +1542,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         label: name,
         description: `${providerLabel} · ${slug}`,
       }));
-  }, [composerTrigger, searchableModelOptions, workspaceEntries]);
+  }, [composerTrigger, isComparisonView, searchableModelOptions, workspaceEntries]);
   const composerMenuOpen = Boolean(composerTrigger);
   const activeComposerMenuItem = useMemo(
     () =>
@@ -2615,6 +2653,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [activeThreadId, focusComposer, terminalState.terminalOpen]);
 
   useEffect(() => {
+    if (isComparisonView) {
+      return;
+    }
     const handler = (event: globalThis.KeyboardEvent) => {
       if (!activeThreadId || event.defaultPrevented) return;
       const shortcutContext = {
@@ -2681,6 +2722,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [
     activeProject,
+    isComparisonView,
     terminalState.terminalOpen,
     terminalState.activeTerminalId,
     activeThreadId,
@@ -2882,7 +2924,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
       return;
     }
     const standaloneSlashCommand =
-      composerImages.length === 0 && sendableComposerTerminalContexts.length === 0
+      !isComparisonView &&
+      composerImages.length === 0 &&
+      sendableComposerTerminalContexts.length === 0
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand) {
@@ -2940,10 +2984,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
     const outgoingMessageText = formatOutgoingPrompt({
-      provider: selectedProvider,
-      model: selectedModel,
-      models: selectedProviderModels,
-      effort: selectedPromptEffort,
+      providers: providerStatuses,
+      modelSelection: selectedModelSelection,
       text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
     const turnAttachmentsPromise = Promise.all(
@@ -3314,10 +3356,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
       const messageIdForSend = newMessageId();
       const messageCreatedAt = new Date().toISOString();
       const outgoingMessageText = formatOutgoingPrompt({
-        provider: selectedProvider,
-        model: selectedModel,
-        models: selectedProviderModels,
-        effort: selectedPromptEffort,
+        providers: providerStatuses,
+        modelSelection: selectedModelSelection,
         text: trimmed,
       });
 
@@ -3403,15 +3443,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
       isSendBusy,
       isServerThread,
       persistThreadSettingsForNextTurn,
+      providerStatuses,
       resetLocalDispatch,
       runtimeMode,
-      selectedPromptEffort,
       selectedModelSelection,
-      selectedProvider,
-      selectedProviderModels,
       setComposerDraftInteractionMode,
       setThreadError,
-      selectedModel,
     ],
   );
 
@@ -3435,10 +3472,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
     const planMarkdown = activeProposedPlan.planMarkdown;
     const implementationPrompt = buildPlanImplementationPrompt(planMarkdown);
     const outgoingImplementationPrompt = formatOutgoingPrompt({
-      provider: selectedProvider,
-      model: selectedModel,
-      models: selectedProviderModels,
-      effort: selectedPromptEffort,
+      providers: providerStatuses,
+      modelSelection: selectedModelSelection,
       text: implementationPrompt,
     });
     const nextThreadTitle = truncate(buildPlanImplementationThreadTitle(planMarkdown));
@@ -3523,18 +3558,19 @@ export default function ChatView({ threadId }: ChatViewProps) {
     isSendBusy,
     isServerThread,
     navigate,
+    providerStatuses,
     resetLocalDispatch,
     runtimeMode,
-    selectedPromptEffort,
     selectedModelSelection,
-    selectedProvider,
-    selectedProviderModels,
-    selectedModel,
   ]);
 
   const onProviderModelSelect = useCallback(
     (provider: ProviderKind, model: string) => {
       if (!activeThread) return;
+      if (isComparisonView) {
+        scheduleComposerFocus();
+        return;
+      }
       if (lockedProvider !== null && provider !== lockedProvider) {
         scheduleComposerFocus();
         return;
@@ -3556,6 +3592,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     },
     [
       activeThread,
+      isComparisonView,
       lockedProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
@@ -3826,7 +3863,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
     event: KeyboardEvent,
   ) => {
-    if (key === "Tab" && event.shiftKey) {
+    if (!isComparisonView && key === "Tab" && event.shiftKey) {
       toggleInteractionMode();
       return true;
     }
@@ -3924,13 +3961,19 @@ export default function ChatView({ threadId }: ChatViewProps) {
       <header
         className={cn(
           "border-b border-border px-3 sm:px-5",
-          isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
+          isElectron && !isComparisonView
+            ? "drag-region flex h-[52px] items-center"
+            : "py-2 sm:py-3",
         )}
       >
         <ChatHeader
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThread.title}
           activeProjectName={activeProject?.name}
+          viewMode={viewMode}
+          providerLabel={comparisonProviderLabel}
+          modelLabel={comparisonModelLabel}
+          statusLabel={comparisonStatusLabel}
           isGitRepo={isGitRepo}
           openInCwd={gitCwd}
           activeProjectScripts={activeProject?.scripts}
@@ -4193,7 +4236,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
                               ? "Add feedback to refine the plan, or leave this blank to implement it"
                               : phase === "disconnected"
                                 ? "Ask for follow-up changes or attach images"
-                                : "Ask anything, @tag files/folders, or use / to show available commands"
+                                : isComparisonView
+                                  ? "Ask anything or @tag files/folders"
+                                  : "Ask anything, @tag files/folders, or use / to show available commands"
                       }
                       disabled={isConnecting || isComposerApprovalState}
                     />
@@ -4229,126 +4274,145 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             : "gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
                         )}
                       >
-                        {/* Provider/model picker */}
-                        <ProviderModelPicker
-                          compact={isComposerFooterCompact}
-                          provider={selectedProvider}
-                          model={selectedModelForPickerWithCustomFallback}
-                          lockedProvider={lockedProvider}
-                          providers={providerStatuses}
-                          modelOptionsByProvider={modelOptionsByProvider}
-                          {...(composerProviderState.modelPickerIconClassName
-                            ? {
-                                activeProviderIconClassName:
-                                  composerProviderState.modelPickerIconClassName,
-                              }
-                            : {})}
-                          onProviderModelChange={onProviderModelSelect}
-                        />
-
-                        {isComposerFooterCompact ? (
-                          <CompactComposerControlsMenu
-                            activePlan={Boolean(
-                              activePlan || sidebarProposedPlan || planSidebarOpen,
-                            )}
-                            interactionMode={interactionMode}
-                            planSidebarOpen={planSidebarOpen}
-                            runtimeMode={runtimeMode}
-                            traitsMenuContent={providerTraitsMenuContent}
-                            onToggleInteractionMode={toggleInteractionMode}
-                            onTogglePlanSidebar={togglePlanSidebar}
-                            onToggleRuntimeMode={toggleRuntimeMode}
-                          />
+                        {isComparisonView ? (
+                          <div
+                            className="flex min-w-0 flex-wrap items-center gap-1.5"
+                            data-testid="comparison-chat-pinned-controls"
+                          >
+                            <span className="rounded-full border border-border/80 px-2.5 py-1 text-muted-foreground/80 text-xs">
+                              {comparisonModelLabel ?? selectedModelSelection.model}
+                            </span>
+                            <span className="rounded-full border border-border/80 px-2.5 py-1 text-muted-foreground/80 text-xs">
+                              {interactionMode === "plan" ? "Plan mode" : "Chat mode"}
+                            </span>
+                            <span className="rounded-full border border-border/80 px-2.5 py-1 text-muted-foreground/80 text-xs">
+                              {runtimeMode === "full-access" ? "Full access" : "Approval required"}
+                            </span>
+                          </div>
                         ) : (
                           <>
-                            {providerTraitsPicker ? (
+                            {/* Provider/model picker */}
+                            <ProviderModelPicker
+                              compact={isComposerFooterCompact}
+                              provider={selectedProvider}
+                              model={selectedModelForPickerWithCustomFallback}
+                              lockedProvider={lockedProvider}
+                              providers={providerStatuses}
+                              modelOptionsByProvider={modelOptionsByProvider}
+                              {...(composerProviderState.modelPickerIconClassName
+                                ? {
+                                    activeProviderIconClassName:
+                                      composerProviderState.modelPickerIconClassName,
+                                  }
+                                : {})}
+                              onProviderModelChange={onProviderModelSelect}
+                            />
+
+                            {isComposerFooterCompact ? (
+                              <CompactComposerControlsMenu
+                                activePlan={Boolean(
+                                  activePlan || sidebarProposedPlan || planSidebarOpen,
+                                )}
+                                interactionMode={interactionMode}
+                                planSidebarOpen={planSidebarOpen}
+                                runtimeMode={runtimeMode}
+                                traitsMenuContent={providerTraitsMenuContent}
+                                onToggleInteractionMode={toggleInteractionMode}
+                                onTogglePlanSidebar={togglePlanSidebar}
+                                onToggleRuntimeMode={toggleRuntimeMode}
+                              />
+                            ) : (
                               <>
+                                {providerTraitsPicker ? (
+                                  <>
+                                    <Separator
+                                      orientation="vertical"
+                                      className="mx-0.5 hidden h-4 sm:block"
+                                    />
+                                    {providerTraitsPicker}
+                                  </>
+                                ) : null}
+
                                 <Separator
                                   orientation="vertical"
                                   className="mx-0.5 hidden h-4 sm:block"
                                 />
-                                {providerTraitsPicker}
-                              </>
-                            ) : null}
 
-                            <Separator
-                              orientation="vertical"
-                              className="mx-0.5 hidden h-4 sm:block"
-                            />
-
-                            <Button
-                              variant="ghost"
-                              className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-                              size="sm"
-                              type="button"
-                              onClick={toggleInteractionMode}
-                              title={
-                                interactionMode === "plan"
-                                  ? "Plan mode — click to return to normal chat mode"
-                                  : "Default mode — click to enter plan mode"
-                              }
-                            >
-                              <BotIcon />
-                              <span className="sr-only sm:not-sr-only">
-                                {interactionMode === "plan" ? "Plan" : "Chat"}
-                              </span>
-                            </Button>
-
-                            <Separator
-                              orientation="vertical"
-                              className="mx-0.5 hidden h-4 sm:block"
-                            />
-
-                            <Button
-                              variant="ghost"
-                              className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-                              size="sm"
-                              type="button"
-                              onClick={() =>
-                                void handleRuntimeModeChange(
-                                  runtimeMode === "full-access"
-                                    ? "approval-required"
-                                    : "full-access",
-                                )
-                              }
-                              title={
-                                runtimeMode === "full-access"
-                                  ? "Full access — click to require approvals"
-                                  : "Approval required — click for full access"
-                              }
-                            >
-                              {runtimeMode === "full-access" ? <LockOpenIcon /> : <LockIcon />}
-                              <span className="sr-only sm:not-sr-only">
-                                {runtimeMode === "full-access" ? "Full access" : "Supervised"}
-                              </span>
-                            </Button>
-
-                            {activePlan || sidebarProposedPlan || planSidebarOpen ? (
-                              <>
-                                <Separator
-                                  orientation="vertical"
-                                  className="mx-0.5 hidden h-4 sm:block"
-                                />
                                 <Button
                                   variant="ghost"
-                                  className={cn(
-                                    "shrink-0 whitespace-nowrap px-2 sm:px-3",
-                                    planSidebarOpen
-                                      ? "text-blue-400 hover:text-blue-300"
-                                      : "text-muted-foreground/70 hover:text-foreground/80",
-                                  )}
+                                  className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
                                   size="sm"
                                   type="button"
-                                  onClick={togglePlanSidebar}
+                                  onClick={toggleInteractionMode}
                                   title={
-                                    planSidebarOpen ? "Hide plan sidebar" : "Show plan sidebar"
+                                    interactionMode === "plan"
+                                      ? "Plan mode — click to return to normal chat mode"
+                                      : "Default mode — click to enter plan mode"
                                   }
                                 >
-                                  <ListTodoIcon />
-                                  <span className="sr-only sm:not-sr-only">Plan</span>
+                                  <BotIcon />
+                                  <span className="sr-only sm:not-sr-only">
+                                    {interactionMode === "plan" ? "Plan" : "Chat"}
+                                  </span>
                                 </Button>
+
+                                <Separator
+                                  orientation="vertical"
+                                  className="mx-0.5 hidden h-4 sm:block"
+                                />
+
+                                <Button
+                                  variant="ghost"
+                                  className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
+                                  size="sm"
+                                  type="button"
+                                  onClick={() =>
+                                    void handleRuntimeModeChange(
+                                      runtimeMode === "full-access"
+                                        ? "approval-required"
+                                        : "full-access",
+                                    )
+                                  }
+                                  title={
+                                    runtimeMode === "full-access"
+                                      ? "Full access — click to require approvals"
+                                      : "Approval required — click for full access"
+                                  }
+                                >
+                                  {runtimeMode === "full-access" ? <LockOpenIcon /> : <LockIcon />}
+                                  <span className="sr-only sm:not-sr-only">
+                                    {runtimeMode === "full-access" ? "Full access" : "Supervised"}
+                                  </span>
+                                </Button>
+
+                                {activePlan || sidebarProposedPlan || planSidebarOpen ? (
+                                  <>
+                                    <Separator
+                                      orientation="vertical"
+                                      className="mx-0.5 hidden h-4 sm:block"
+                                    />
+                                    <Button
+                                      variant="ghost"
+                                      className={cn(
+                                        "shrink-0 whitespace-nowrap px-2 sm:px-3",
+                                        planSidebarOpen
+                                          ? "text-blue-400 hover:text-blue-300"
+                                          : "text-muted-foreground/70 hover:text-foreground/80",
+                                      )}
+                                      size="sm"
+                                      type="button"
+                                      onClick={togglePlanSidebar}
+                                      title={
+                                        planSidebarOpen ? "Hide plan sidebar" : "Show plan sidebar"
+                                      }
+                                    >
+                                      <ListTodoIcon />
+                                      <span className="sr-only sm:not-sr-only">Plan</span>
+                                    </Button>
+                                  </>
+                                ) : null}
                               </>
-                            ) : null}
+                            )}
                           </>
                         )}
                       </div>
@@ -4404,7 +4468,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
             </form>
           </div>
 
-          {isGitRepo && (
+          {!isComparisonView && isGitRepo && (
             <BranchToolbar
               threadId={activeThread.id}
               onEnvModeChange={onEnvModeChange}
@@ -4415,7 +4479,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 : {})}
             />
           )}
-          {pullRequestDialogState ? (
+          {!isComparisonView && pullRequestDialogState ? (
             <PullRequestThreadDialog
               key={pullRequestDialogState.key}
               open
@@ -4434,7 +4498,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         {/* end chat column */}
 
         {/* Plan sidebar */}
-        {planSidebarOpen ? (
+        {!isComparisonView && planSidebarOpen ? (
           <PlanSidebar
             activePlan={activePlan}
             activeProposedPlan={sidebarProposedPlan}
@@ -4454,21 +4518,22 @@ export default function ChatView({ threadId }: ChatViewProps) {
       </div>
       {/* end horizontal flex container */}
 
-      {mountedTerminalThreadIds.map((mountedThreadId) => (
-        <PersistentThreadTerminalDrawer
-          key={mountedThreadId}
-          threadId={mountedThreadId}
-          visible={mountedThreadId === activeThreadId && terminalState.terminalOpen}
-          launchContext={
-            mountedThreadId === activeThreadId ? (activeTerminalLaunchContext ?? null) : null
-          }
-          focusRequestId={mountedThreadId === activeThreadId ? terminalFocusRequestId : 0}
-          splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
-          newShortcutLabel={newTerminalShortcutLabel ?? undefined}
-          closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
-          onAddTerminalContext={addTerminalContextToDraft}
-        />
-      ))}
+      {!isComparisonView &&
+        mountedTerminalThreadIds.map((mountedThreadId) => (
+          <PersistentThreadTerminalDrawer
+            key={mountedThreadId}
+            threadId={mountedThreadId}
+            visible={mountedThreadId === activeThreadId && terminalState.terminalOpen}
+            launchContext={
+              mountedThreadId === activeThreadId ? (activeTerminalLaunchContext ?? null) : null
+            }
+            focusRequestId={mountedThreadId === activeThreadId ? terminalFocusRequestId : 0}
+            splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
+            newShortcutLabel={newTerminalShortcutLabel ?? undefined}
+            closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
+            onAddTerminalContext={addTerminalContextToDraft}
+          />
+        ))}
 
       {expandedImage && expandedImageItem && (
         <div

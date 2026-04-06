@@ -14,7 +14,10 @@ import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
+import { Route as ChatNewPlanRouteImport } from './routes/_chat.new-plan'
 import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
+import { Route as ChatNewPlanConfigureRouteImport } from './routes/_chat.new-plan.configure'
+import { Route as ChatNewPlanCompareRouteImport } from './routes/_chat.new-plan.compare'
 
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
@@ -40,34 +43,58 @@ const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
   path: '/archived',
   getParentRoute: () => SettingsRoute,
 } as any)
+const ChatNewPlanRoute = ChatNewPlanRouteImport.update({
+  id: '/new-plan',
+  path: '/new-plan',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatThreadIdRoute = ChatThreadIdRouteImport.update({
   id: '/$threadId',
   path: '/$threadId',
   getParentRoute: () => ChatRoute,
+} as any)
+const ChatNewPlanConfigureRoute = ChatNewPlanConfigureRouteImport.update({
+  id: '/configure',
+  path: '/configure',
+  getParentRoute: () => ChatNewPlanRoute,
+} as any)
+const ChatNewPlanCompareRoute = ChatNewPlanCompareRouteImport.update({
+  id: '/compare',
+  path: '/compare',
+  getParentRoute: () => ChatNewPlanRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/settings': typeof SettingsRouteWithChildren
   '/$threadId': typeof ChatThreadIdRoute
+  '/new-plan': typeof ChatNewPlanRouteWithChildren
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/general': typeof SettingsGeneralRoute
+  '/new-plan/compare': typeof ChatNewPlanCompareRoute
+  '/new-plan/configure': typeof ChatNewPlanConfigureRoute
 }
 export interface FileRoutesByTo {
   '/settings': typeof SettingsRouteWithChildren
   '/$threadId': typeof ChatThreadIdRoute
+  '/new-plan': typeof ChatNewPlanRouteWithChildren
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/': typeof ChatIndexRoute
+  '/new-plan/compare': typeof ChatNewPlanCompareRoute
+  '/new-plan/configure': typeof ChatNewPlanConfigureRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
   '/settings': typeof SettingsRouteWithChildren
   '/_chat/$threadId': typeof ChatThreadIdRoute
+  '/_chat/new-plan': typeof ChatNewPlanRouteWithChildren
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/_chat/': typeof ChatIndexRoute
+  '/_chat/new-plan/compare': typeof ChatNewPlanCompareRoute
+  '/_chat/new-plan/configure': typeof ChatNewPlanConfigureRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -75,23 +102,32 @@ export interface FileRouteTypes {
     | '/'
     | '/settings'
     | '/$threadId'
+    | '/new-plan'
     | '/settings/archived'
     | '/settings/general'
+    | '/new-plan/compare'
+    | '/new-plan/configure'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/settings'
     | '/$threadId'
+    | '/new-plan'
     | '/settings/archived'
     | '/settings/general'
     | '/'
+    | '/new-plan/compare'
+    | '/new-plan/configure'
   id:
     | '__root__'
     | '/_chat'
     | '/settings'
     | '/_chat/$threadId'
+    | '/_chat/new-plan'
     | '/settings/archived'
     | '/settings/general'
     | '/_chat/'
+    | '/_chat/new-plan/compare'
+    | '/_chat/new-plan/configure'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -136,6 +172,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsArchivedRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/_chat/new-plan': {
+      id: '/_chat/new-plan'
+      path: '/new-plan'
+      fullPath: '/new-plan'
+      preLoaderRoute: typeof ChatNewPlanRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/$threadId': {
       id: '/_chat/$threadId'
       path: '/$threadId'
@@ -143,16 +186,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatThreadIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/new-plan/configure': {
+      id: '/_chat/new-plan/configure'
+      path: '/configure'
+      fullPath: '/new-plan/configure'
+      preLoaderRoute: typeof ChatNewPlanConfigureRouteImport
+      parentRoute: typeof ChatNewPlanRoute
+    }
+    '/_chat/new-plan/compare': {
+      id: '/_chat/new-plan/compare'
+      path: '/compare'
+      fullPath: '/new-plan/compare'
+      preLoaderRoute: typeof ChatNewPlanCompareRouteImport
+      parentRoute: typeof ChatNewPlanRoute
+    }
   }
 }
 
+interface ChatNewPlanRouteChildren {
+  ChatNewPlanCompareRoute: typeof ChatNewPlanCompareRoute
+  ChatNewPlanConfigureRoute: typeof ChatNewPlanConfigureRoute
+}
+
+const ChatNewPlanRouteChildren: ChatNewPlanRouteChildren = {
+  ChatNewPlanCompareRoute: ChatNewPlanCompareRoute,
+  ChatNewPlanConfigureRoute: ChatNewPlanConfigureRoute,
+}
+
+const ChatNewPlanRouteWithChildren = ChatNewPlanRoute._addFileChildren(
+  ChatNewPlanRouteChildren,
+)
+
 interface ChatRouteChildren {
   ChatThreadIdRoute: typeof ChatThreadIdRoute
+  ChatNewPlanRoute: typeof ChatNewPlanRouteWithChildren
   ChatIndexRoute: typeof ChatIndexRoute
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
   ChatThreadIdRoute: ChatThreadIdRoute,
+  ChatNewPlanRoute: ChatNewPlanRouteWithChildren,
   ChatIndexRoute: ChatIndexRoute,
 }
 

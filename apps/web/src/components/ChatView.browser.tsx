@@ -5,6 +5,7 @@ import {
   EventId,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
+  type ModelCapabilities,
   type OrchestrationEvent,
   type OrchestrationReadModel,
   type ProjectId,
@@ -29,6 +30,7 @@ import {
   type TerminalContextDraft,
   removeInlineTerminalContextPlaceholder,
 } from "../lib/terminalContext";
+import { usePlanDraftStore } from "../planDraftStore";
 import { isMacPlatform } from "../lib/utils";
 import { __resetNativeApiForTests } from "../nativeApi";
 import { getRouter } from "../router";
@@ -147,6 +149,136 @@ function createBaseServerConfig(): ServerConfig {
       ...DEFAULT_CLIENT_SETTINGS,
     },
   };
+}
+
+function effort(
+  value: string,
+  isDefault = false,
+): ModelCapabilities["reasoningEffortLevels"][number] {
+  return {
+    value,
+    label: value.toUpperCase(),
+    ...(isDefault ? { isDefault: true } : {}),
+  };
+}
+
+function capabilities(input: Partial<ModelCapabilities> = {}): ModelCapabilities {
+  return {
+    reasoningEffortLevels: [],
+    supportsFastMode: false,
+    supportsThinkingToggle: false,
+    contextWindowOptions: [],
+    promptInjectedEffortLevels: [],
+    ...input,
+  };
+}
+
+function createNewPlanBrowserProviders(): ServerConfig["providers"] {
+  return [
+    {
+      provider: "codex",
+      enabled: true,
+      installed: true,
+      version: "0.116.0",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: NOW_ISO,
+      models: [
+        {
+          slug: "gpt-5.4",
+          name: "GPT-5.4",
+          isCustom: false,
+          capabilities: capabilities({
+            reasoningEffortLevels: [
+              effort("low"),
+              effort("medium"),
+              effort("high"),
+              effort("xhigh", true),
+            ],
+          }),
+        },
+        {
+          slug: "gpt-5.4-mini",
+          name: "GPT-5.4 Mini",
+          isCustom: false,
+          capabilities: capabilities({
+            reasoningEffortLevels: [effort("low"), effort("medium"), effort("high", true)],
+          }),
+        },
+        {
+          slug: "gpt-5.3-codex",
+          name: "GPT-5.3 Codex",
+          isCustom: false,
+          capabilities: capabilities({
+            reasoningEffortLevels: [effort("low"), effort("medium"), effort("high", true)],
+          }),
+        },
+        {
+          slug: "gpt-5.3-codex-spark",
+          name: "GPT-5.3 Codex Spark",
+          isCustom: false,
+          capabilities: capabilities({
+            reasoningEffortLevels: [effort("low"), effort("medium"), effort("high", true)],
+          }),
+        },
+      ],
+    },
+    {
+      provider: "claudeAgent",
+      enabled: true,
+      installed: true,
+      version: "1.0.0",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: NOW_ISO,
+      models: [
+        {
+          slug: "claude-opus-4-6",
+          name: "Claude Opus 4.6",
+          isCustom: false,
+          capabilities: capabilities({
+            reasoningEffortLevels: [effort("low"), effort("high"), effort("max", true)],
+          }),
+        },
+        {
+          slug: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          isCustom: false,
+          capabilities: capabilities({
+            reasoningEffortLevels: [effort("low"), effort("high", true), effort("ultrathink")],
+            promptInjectedEffortLevels: ["ultrathink"],
+          }),
+        },
+        {
+          slug: "claude-haiku-4-5",
+          name: "Claude Haiku 4.5",
+          isCustom: false,
+          capabilities: capabilities({
+            supportsThinkingToggle: true,
+          }),
+        },
+      ],
+    },
+    {
+      provider: "codex",
+      enabled: false,
+      installed: true,
+      version: "0.116.0",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: NOW_ISO,
+      models: [
+        {
+          slug: "gpt-5.2-codex",
+          name: "GPT-5.2 Codex",
+          isCustom: false,
+          capabilities: capabilities({
+            reasoningEffortLevels: [effort("low"), effort("medium"), effort("high", true)],
+          }),
+        },
+      ],
+    },
+  ];
 }
 
 function createUserMessage(options: {
@@ -314,7 +446,21 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
 function addThreadToSnapshot(
   snapshot: OrchestrationReadModel,
   threadId: ThreadId,
+  options?: {
+    title?: string;
+    modelSelection?: OrchestrationReadModel["threads"][number]["modelSelection"];
+    interactionMode?: OrchestrationReadModel["threads"][number]["interactionMode"];
+    runtimeMode?: OrchestrationReadModel["threads"][number]["runtimeMode"];
+  },
 ): OrchestrationReadModel {
+  const modelSelection =
+    options?.modelSelection ??
+    ({
+      provider: "codex",
+      model: "gpt-5",
+    } as const);
+  const runtimeMode = options?.runtimeMode ?? "full-access";
+
   return {
     ...snapshot,
     snapshotSequence: snapshot.snapshotSequence + 1,
@@ -323,13 +469,10 @@ function addThreadToSnapshot(
       {
         id: threadId,
         projectId: PROJECT_ID,
-        title: "New thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5",
-        },
-        interactionMode: "default",
-        runtimeMode: "full-access",
+        title: options?.title ?? "New thread",
+        modelSelection,
+        interactionMode: options?.interactionMode ?? "default",
+        runtimeMode,
         branch: "main",
         worktreePath: null,
         latestTurn: null,
@@ -344,8 +487,8 @@ function addThreadToSnapshot(
         session: {
           threadId,
           status: "ready",
-          providerName: "codex",
-          runtimeMode: "full-access",
+          providerName: modelSelection.provider,
+          runtimeMode,
           activeTurnId: null,
           lastError: null,
           updatedAt: NOW_ISO,
@@ -355,7 +498,16 @@ function addThreadToSnapshot(
   };
 }
 
-function createThreadCreatedEvent(threadId: ThreadId, sequence: number): OrchestrationEvent {
+function createThreadCreatedEvent(
+  threadId: ThreadId,
+  sequence: number,
+  options?: {
+    title?: string;
+    modelSelection?: OrchestrationReadModel["threads"][number]["modelSelection"];
+    interactionMode?: OrchestrationReadModel["threads"][number]["interactionMode"];
+    runtimeMode?: OrchestrationReadModel["threads"][number]["runtimeMode"];
+  },
+): OrchestrationEvent {
   return {
     sequence,
     eventId: EventId.makeUnsafe(`event-thread-created-${sequence}`),
@@ -370,13 +522,15 @@ function createThreadCreatedEvent(threadId: ThreadId, sequence: number): Orchest
     payload: {
       threadId,
       projectId: PROJECT_ID,
-      title: "New thread",
-      modelSelection: {
-        provider: "codex",
-        model: "gpt-5",
-      },
-      runtimeMode: "full-access",
-      interactionMode: "default",
+      title: options?.title ?? "New thread",
+      modelSelection:
+        options?.modelSelection ??
+        ({
+          provider: "codex",
+          model: "gpt-5",
+        } as const),
+      runtimeMode: options?.runtimeMode ?? "full-access",
+      interactionMode: options?.interactionMode ?? "default",
       branch: "main",
       worktreePath: null,
       createdAt: NOW_ISO,
@@ -424,6 +578,69 @@ function createDraftOnlySnapshot(): OrchestrationReadModel {
   return {
     ...snapshot,
     threads: [],
+  };
+}
+
+function createNewPlanLaunchResolver(options?: {
+  failTurnStartForModels?: string[];
+}): (body: NormalizedWsRpcRequestBody) => unknown | undefined {
+  let nextSequence: number | null = null;
+  const failedModels = new Set(options?.failTurnStartForModels ?? []);
+
+  return (body) => {
+    if (nextSequence === null) {
+      nextSequence = fixture.snapshot.snapshotSequence;
+    }
+    if (body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand) {
+      return undefined;
+    }
+
+    const command = body as Record<string, unknown>;
+    if (command.type === "thread.create") {
+      nextSequence += 1;
+      const threadId = command.threadId as ThreadId;
+      const title = command.title as string;
+      const modelSelection =
+        command.modelSelection as OrchestrationReadModel["threads"][number]["modelSelection"];
+      const interactionMode =
+        command.interactionMode as OrchestrationReadModel["threads"][number]["interactionMode"];
+      const runtimeMode =
+        command.runtimeMode as OrchestrationReadModel["threads"][number]["runtimeMode"];
+
+      fixture.snapshot = addThreadToSnapshot(fixture.snapshot, threadId, {
+        title,
+        modelSelection,
+        interactionMode,
+        runtimeMode,
+      });
+      sendOrchestrationDomainEvent(
+        createThreadCreatedEvent(threadId, nextSequence, {
+          title,
+          modelSelection,
+          interactionMode,
+          runtimeMode,
+        }),
+      );
+      return { sequence: nextSequence };
+    }
+
+    if (command.type !== "thread.turn.start") {
+      return undefined;
+    }
+
+    const modelSelection = command.modelSelection as { model: string };
+    if (failedModels.has(modelSelection.model)) {
+      return Promise.reject(
+        new Error(
+          modelSelection.model === "claude-opus-4-6"
+            ? "Opus launch failed"
+            : `Failed to start ${modelSelection.model}`,
+        ),
+      );
+    }
+
+    nextSequence += 1;
+    return { sequence: nextSequence };
   };
 }
 
@@ -1150,6 +1367,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       projectDraftThreadIdByProjectId: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
+    });
+    usePlanDraftStore.setState({
+      draftsByProjectId: {},
     });
     useStore.setState({
       projects: [],
@@ -2454,6 +2674,328 @@ describe("ChatView timeline estimator parity (full app)", () => {
         .element(page.getByText("Send a message to start the conversation."))
         .toBeInTheDocument();
       await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("launches a multi-model plan comparison, pins comparison panes, and stacks on narrow widths", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-new-plan-test" as MessageId,
+        targetText: "new plan target",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          providers: createNewPlanBrowserProviders(),
+        };
+      },
+      resolveRpc: createNewPlanLaunchResolver(),
+    });
+
+    try {
+      const newPlanButton = page.getByTestId("new-plan-button");
+      await expect.element(newPlanButton).toBeInTheDocument();
+
+      await newPlanButton.click();
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === "/new-plan",
+        "Route should change to the new plan intro screen.",
+      );
+      await expect.element(page.getByText("Start a new comprehensive plan")).toBeInTheDocument();
+
+      const startPlanningButton = await waitForButtonContainingText("Start planning");
+      await startPlanningButton.click();
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === "/new-plan/configure",
+        "Route should change to the new plan model selection screen.",
+      );
+      await expect.element(page.getByText("Select AI Models")).toBeInTheDocument();
+
+      const gpt54Card = page.getByTestId("plan-model-card-codex-gpt-5.4");
+      const opusCard = page.getByTestId("plan-model-card-claudeAgent-claude-opus-4-6");
+      const sonnetCard = page.getByTestId("plan-model-card-claudeAgent-claude-sonnet-4-6");
+      const fourthCard = page.getByTestId("plan-model-card-codex-gpt-5.4-mini");
+
+      await expect.element(gpt54Card).toBeInTheDocument();
+      await expect.element(opusCard).toBeInTheDocument();
+      await expect.element(sonnetCard).toBeInTheDocument();
+      expect(document.body.textContent ?? "").not.toContain("GPT-5.2 Codex");
+
+      const launchButtonBeforePrompt = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Start planning"]',
+      );
+      expect(launchButtonBeforePrompt?.disabled).toBe(true);
+
+      await gpt54Card.click();
+      await opusCard.click();
+      await sonnetCard.click();
+      await expect.element(page.getByText("3 models selected")).toBeInTheDocument();
+
+      await vi.waitFor(() => {
+        expect((fourthCard.element() as HTMLButtonElement | null)?.disabled).toBe(true);
+      });
+
+      await sonnetCard.click();
+      await expect.element(page.getByText("2 models selected")).toBeInTheDocument();
+      await vi.waitFor(() => {
+        expect((fourthCard.element() as HTMLButtonElement | null)?.disabled).toBe(false);
+      });
+
+      await sonnetCard.click();
+      await expect.element(page.getByText("3 models selected")).toBeInTheDocument();
+
+      const composerEditorElement = await waitForComposerEditor();
+      const composerEditor = page.getByTestId("composer-editor");
+      await expect.element(composerEditor).toBeInTheDocument();
+      await composerEditor.click();
+      await composerEditor.fill("Build a kanban board with offline sync");
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector<HTMLElement>('[data-testid="composer-editor"]')?.textContent,
+        ).toBe("Build a kanban board with offline sync");
+      });
+
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector<HTMLButtonElement>('button[aria-label="Start planning"]')
+            ?.disabled,
+        ).toBe(false);
+      });
+
+      composerEditorElement.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await waitForURL(
+        mounted.router,
+        (path) => path === "/new-plan/compare",
+        "Route should change to the compare screen after submit.",
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelectorAll('[data-testid="plan-compare-item"]').length).toBe(3);
+          expect(document.querySelectorAll('[data-testid="plan-compare-chat-pane"]').length).toBe(
+            3,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await vi.waitFor(
+        () => {
+          const pageText = document.body.textContent ?? "";
+          expect(pageText).toContain("Claude Opus 4.6");
+          expect(pageText).toContain("Claude Sonnet 4.6");
+          expect(pageText).toContain("GPT-5.4");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(document.querySelector('[data-chat-provider-model-picker="true"]')).toBeNull();
+      expect(document.querySelector('button[aria-label="Toggle terminal drawer"]')).toBeNull();
+
+      const dispatchRequests = wsRequests.filter(
+        (request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand,
+      ) as Array<Record<string, unknown>>;
+      const createRequests = dispatchRequests.filter((request) => request.type === "thread.create");
+      const turnStartRequests = dispatchRequests.filter(
+        (request) => request.type === "thread.turn.start",
+      );
+
+      expect(createRequests).toHaveLength(3);
+      expect(turnStartRequests).toHaveLength(3);
+
+      expect(createRequests).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runtimeMode: "full-access",
+            interactionMode: "plan",
+            title: expect.stringContaining("(GPT-5.4)"),
+            modelSelection: expect.objectContaining({
+              provider: "codex",
+              model: "gpt-5.4",
+              options: expect.objectContaining({
+                reasoningEffort: "xhigh",
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            runtimeMode: "full-access",
+            interactionMode: "plan",
+            title: expect.stringContaining("(Claude Opus 4.6)"),
+            modelSelection: expect.objectContaining({
+              provider: "claudeAgent",
+              model: "claude-opus-4-6",
+              options: expect.objectContaining({
+                effort: "max",
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            runtimeMode: "full-access",
+            interactionMode: "plan",
+            title: expect.stringContaining("(Claude Sonnet 4.6)"),
+            modelSelection: expect.objectContaining({
+              provider: "claudeAgent",
+              model: "claude-sonnet-4-6",
+              options: expect.objectContaining({
+                effort: "ultrathink",
+              }),
+            }),
+          }),
+        ]),
+      );
+
+      expect(turnStartRequests).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runtimeMode: "full-access",
+            interactionMode: "plan",
+            modelSelection: expect.objectContaining({
+              provider: "claudeAgent",
+              model: "claude-sonnet-4-6",
+              options: expect.objectContaining({
+                effort: "ultrathink",
+              }),
+            }),
+            message: expect.objectContaining({
+              text: "Ultrathink:\nBuild a kanban board with offline sync",
+            }),
+          }),
+        ]),
+      );
+
+      await mounted.setViewport(COMPACT_FOOTER_VIEWPORT);
+      const compareGrid = document.querySelector<HTMLElement>('[data-testid="plan-compare-grid"]');
+      expect(compareGrid).toBeTruthy();
+      const narrowColumns = getComputedStyle(compareGrid!)
+        .gridTemplateColumns.split(" ")
+        .filter(Boolean);
+      expect(narrowColumns.length).toBe(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows partial plan-launch failures without blocking successful comparison panes", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-new-plan-partial-failure" as MessageId,
+        targetText: "new plan partial failure",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          providers: createNewPlanBrowserProviders(),
+        };
+      },
+      resolveRpc: createNewPlanLaunchResolver({
+        failTurnStartForModels: ["claude-opus-4-6"],
+      }),
+    });
+
+    try {
+      await page.getByTestId("new-plan-button").click();
+      await waitForButtonContainingText("Start planning").then((button) => button.click());
+      await waitForURL(
+        mounted.router,
+        (path) => path === "/new-plan/configure",
+        "Route should change to the new plan model selection screen.",
+      );
+
+      await page.getByTestId("plan-model-card-codex-gpt-5.4").click();
+      await page.getByTestId("plan-model-card-claudeAgent-claude-opus-4-6").click();
+      await page.getByTestId("composer-editor").fill("Build a migration runner");
+
+      const submitButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Start planning"]'),
+        "Unable to find new plan submit button.",
+      );
+      submitButton.click();
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === "/new-plan/compare",
+        "Route should still reach the compare screen when at least one model succeeds.",
+      );
+      await vi.waitFor(
+        () => {
+          expect(document.querySelectorAll('[data-testid="plan-compare-item"]').length).toBe(2);
+          expect(document.querySelectorAll('[data-testid="plan-compare-chat-pane"]').length).toBe(
+            1,
+          );
+          expect(document.querySelectorAll('[data-testid="plan-compare-error-pane"]').length).toBe(
+            1,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(document.body.textContent ?? "").toContain(
+        "Failed to start Claude Opus 4.6 planning turn.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders a single comparison pane when one model is selected", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-new-plan-single-pane" as MessageId,
+        targetText: "new plan single pane",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          providers: createNewPlanBrowserProviders(),
+        };
+      },
+      resolveRpc: createNewPlanLaunchResolver(),
+    });
+
+    try {
+      await page.getByTestId("new-plan-button").click();
+      await waitForButtonContainingText("Start planning").then((button) => button.click());
+      await waitForURL(
+        mounted.router,
+        (path) => path === "/new-plan/configure",
+        "Route should change to the new plan model selection screen.",
+      );
+
+      await page.getByTestId("plan-model-card-codex-gpt-5.4").click();
+      await page.getByTestId("composer-editor").fill("Build a docs search index");
+      const submitButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Start planning"]'),
+        "Unable to find new plan submit button.",
+      );
+      submitButton.click();
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === "/new-plan/compare",
+        "Route should change to the compare screen after submit.",
+      );
+      await vi.waitFor(
+        () => {
+          expect(document.querySelectorAll('[data-testid="plan-compare-item"]').length).toBe(1);
+          expect(document.querySelectorAll('[data-testid="plan-compare-chat-pane"]').length).toBe(
+            1,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }

@@ -18,6 +18,10 @@ interface ChatHeaderProps {
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
+  viewMode?: "default" | "comparison";
+  providerLabel?: string | null;
+  modelLabel?: string | null;
+  statusLabel?: string | null;
   isGitRepo: boolean;
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
@@ -42,6 +46,10 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
   activeProjectName,
+  viewMode = "default",
+  providerLabel,
+  modelLabel,
+  statusLabel,
   isGitRepo,
   openInCwd,
   activeProjectScripts,
@@ -61,6 +69,34 @@ export const ChatHeader = memo(function ChatHeader({
   onToggleTerminal,
   onToggleDiff,
 }: ChatHeaderProps) {
+  if (viewMode === "comparison") {
+    return (
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <h2
+            className="truncate text-sm font-medium text-foreground"
+            title={activeThreadTitle}
+            data-testid="comparison-chat-header-title"
+          >
+            {activeThreadTitle}
+          </h2>
+        </div>
+        <div
+          className="flex shrink-0 items-center gap-2"
+          data-testid="comparison-chat-header-badges"
+        >
+          {providerLabel ? <Badge variant="outline">{providerLabel}</Badge> : null}
+          {modelLabel ? (
+            <Badge variant="outline" className="max-w-40 overflow-hidden">
+              <span className="truncate">{modelLabel}</span>
+            </Badge>
+          ) : null}
+          {statusLabel ? <Badge variant="outline">{statusLabel}</Badge> : null}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
