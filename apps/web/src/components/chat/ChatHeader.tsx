@@ -6,8 +6,9 @@ import {
 } from "@t3tools/contracts";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
-import { DiffIcon, TerminalSquareIcon } from "lucide-react";
+import { ArrowLeftIcon, DiffIcon, TerminalSquareIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
@@ -40,6 +41,7 @@ interface ChatHeaderProps {
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
+  onBackToComparison?: (() => void) | undefined;
 }
 
 export const ChatHeader = memo(function ChatHeader({
@@ -68,6 +70,7 @@ export const ChatHeader = memo(function ChatHeader({
   onDeleteProjectScript,
   onToggleTerminal,
   onToggleDiff,
+  onBackToComparison,
 }: ChatHeaderProps) {
   if (viewMode === "comparison") {
     return (
@@ -117,6 +120,12 @@ export const ChatHeader = memo(function ChatHeader({
             No Git
           </Badge>
         )}
+        {onBackToComparison ? (
+          <Button variant="ghost" size="sm" className="h-7 px-2" onClick={onBackToComparison}>
+            <ArrowLeftIcon className="size-3.5" />
+            Back to comparison
+          </Button>
+        ) : null}
       </div>
       <div className="flex shrink-0 items-center justify-end gap-2 @3xl/header-actions:gap-3">
         {activeProjectScripts && (
