@@ -60,6 +60,20 @@ describe("parseDiffRouteSearch", () => {
     });
   });
 
+  it("parses comparison-origin search params", () => {
+    const parsed = parseDiffRouteSearch({
+      comparisonProjectId: "project-1",
+      comparisonRunId: "run-1",
+      comparisonThreadIds: ["thread-1", "thread-2"],
+    });
+
+    expect(parsed).toEqual({
+      comparisonProjectId: "project-1",
+      comparisonRunId: "run-1",
+      comparisonThreadIds: ["thread-1", "thread-2"],
+    });
+  });
+
   it("normalizes whitespace-only values", () => {
     const parsed = parseDiffRouteSearch({
       diff: "1",

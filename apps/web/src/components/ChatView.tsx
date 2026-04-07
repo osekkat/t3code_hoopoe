@@ -31,6 +31,8 @@ import { gitStatusQueryOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
+import { archiveHybridPlanSourceThreads } from "../hybridPlan";
+import { useHybridPlanOriginStore } from "../hybridPlanOriginStore";
 import {
   clampCollapsedComposerCursor,
   type ComposerTrigger,
@@ -604,6 +606,12 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
     strict: false,
     select: (params) => parseDiffRouteSearch(params),
   });
+  const hybridOriginFromStore = useHybridPlanOriginStore((store) =>
+    Object.hasOwn(store.originsByHybridThreadId, threadId)
+      ? store.originsByHybridThreadId[threadId]
+      : null,
+  );
+  const setHybridOrigin = useHybridPlanOriginStore((store) => store.setOrigin);
   const { resolvedTheme } = useTheme();
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
@@ -1064,6 +1072,25 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
   const comparisonStatusLabel = isComparisonView
     ? formatComparisonSessionStatusLabel(activeThread?.session)
     : null;
+  const hybridOriginFromSearch = useMemo(
+    () =>
+      rawSearch.comparisonProjectId && rawSearch.comparisonThreadIds?.length
+        ? {
+            projectId: rawSearch.comparisonProjectId,
+            runId: rawSearch.comparisonRunId,
+            threadIds: rawSearch.comparisonThreadIds,
+          }
+        : null,
+    [rawSearch.comparisonProjectId, rawSearch.comparisonRunId, rawSearch.comparisonThreadIds],
+  );
+  const hybridOrigin = hybridOriginFromSearch ?? hybridOriginFromStore;
+
+  useEffect(() => {
+    if (!hybridOriginFromSearch) {
+      return;
+    }
+    setHybridOrigin(threadId, hybridOriginFromSearch);
+  }, [hybridOriginFromSearch, setHybridOrigin, threadId]);
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(
@@ -1620,6 +1647,20 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
       },
     });
   }, [diffOpen, navigate, threadId]);
+
+  const onBackToComparison = useCallback(() => {
+    if (!hybridOrigin) {
+      return;
+    }
+    void navigate({
+      to: "/new-plan/compare",
+      search: {
+        projectId: hybridOrigin.projectId,
+        runId: hybridOrigin.runId || undefined,
+        threadIds: hybridOrigin.threadIds,
+      },
+    });
+  }, [hybridOrigin, navigate]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -3327,6 +3368,29 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
     setActivePendingUserInputQuestionIndex(Math.max(activePendingProgress.questionIndex - 1, 0));
   }, [activePendingProgress, setActivePendingUserInputQuestionIndex]);
 
+  const archiveHybridSourcePlansAfterImplementation = useCallback(
+    async (
+      api: NonNullable<ReturnType<typeof readNativeApi>>,
+      protectedThreadIds: ReadonlyArray<ThreadId>,
+    ) => {
+      const { failedThreadIds } = await archiveHybridPlanSourceThreads({
+        api,
+        hybridOrigin,
+        protectedThreadIds,
+        threads,
+      });
+      if (failedThreadIds.length > 0) {
+        toastManager.add({
+          type: "error",
+          title: "Some source plans were not archived",
+          description:
+            "Implementation started, but one or more comparison source threads could not be archived.",
+        });
+      }
+    },
+    [hybridOrigin, threads],
+  );
+
   const onSubmitPlanFollowUp = useCallback(
     async ({
       text,
@@ -3414,6 +3478,9 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
             : {}),
           createdAt: messageCreatedAt,
         });
+        if (nextInteractionMode === "default") {
+          await archiveHybridSourcePlansAfterImplementation(api, [activeThread.id]);
+        }
         // Optimistically open the plan sidebar when implementing (not refining).
         // "default" mode here means the agent is executing the plan, which produces
         // step-tracking activities that the sidebar will display.
@@ -3437,6 +3504,7 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
     [
       activeThread,
       activeProposedPlan,
+      archiveHybridSourcePlansAfterImplementation,
       beginLocalDispatch,
       forceStickToBottom,
       isConnecting,
@@ -3525,7 +3593,8 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
       .then(() => {
         return waitForStartedServerThread(nextThreadId);
       })
-      .then(() => {
+      .then(async () => {
+        await archiveHybridSourcePlansAfterImplementation(api, [activeThread.id, nextThreadId]);
         // Signal that the plan sidebar should open on the new thread.
         planSidebarOpenOnNextThreadRef.current = true;
         return navigate({
@@ -3553,6 +3622,7 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
     activeProject,
     activeProposedPlan,
     activeThread,
+    archiveHybridSourcePlansAfterImplementation,
     beginLocalDispatch,
     isConnecting,
     isSendBusy,
@@ -4001,6 +4071,7 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
           onDeleteProjectScript={deleteProjectScript}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
+          onBackToComparison={hybridOrigin ? onBackToComparison : undefined}
         />
       </header>
 
