@@ -31,6 +31,7 @@ import { gitStatusQueryOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
+import { useHybridPlanOriginStore } from "../hybridPlanOriginStore";
 import {
   clampCollapsedComposerCursor,
   type ComposerTrigger,
@@ -604,6 +605,12 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
     strict: false,
     select: (params) => parseDiffRouteSearch(params),
   });
+  const hybridOriginFromStore = useHybridPlanOriginStore((store) =>
+    Object.hasOwn(store.originsByHybridThreadId, threadId)
+      ? store.originsByHybridThreadId[threadId]
+      : null,
+  );
+  const setHybridOrigin = useHybridPlanOriginStore((store) => store.setOrigin);
   const { resolvedTheme } = useTheme();
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
@@ -1064,6 +1071,22 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
   const comparisonStatusLabel = isComparisonView
     ? formatComparisonSessionStatusLabel(activeThread?.session)
     : null;
+  const hybridOriginFromSearch =
+    rawSearch.comparisonProjectId && rawSearch.comparisonThreadIds?.length
+      ? {
+          projectId: rawSearch.comparisonProjectId,
+          runId: rawSearch.comparisonRunId,
+          threadIds: rawSearch.comparisonThreadIds,
+        }
+      : null;
+  const hybridOrigin = hybridOriginFromSearch ?? hybridOriginFromStore;
+
+  useEffect(() => {
+    if (!hybridOriginFromSearch) {
+      return;
+    }
+    setHybridOrigin(threadId, hybridOriginFromSearch);
+  }, [hybridOriginFromSearch, setHybridOrigin, threadId]);
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(
@@ -1620,6 +1643,20 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
       },
     });
   }, [diffOpen, navigate, threadId]);
+
+  const onBackToComparison = useCallback(() => {
+    if (!hybridOrigin) {
+      return;
+    }
+    void navigate({
+      to: "/new-plan/compare",
+      search: {
+        projectId: hybridOrigin.projectId,
+        runId: hybridOrigin.runId || undefined,
+        threadIds: hybridOrigin.threadIds,
+      },
+    });
+  }, [hybridOrigin, navigate]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -3525,7 +3562,28 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
       .then(() => {
         return waitForStartedServerThread(nextThreadId);
       })
-      .then(() => {
+      .then(async () => {
+        if (hybridOrigin?.threadIds?.length) {
+          const archiveResults = await Promise.allSettled(
+            hybridOrigin.threadIds
+              .filter((sourceThreadId) => sourceThreadId !== activeThread.id)
+              .map((sourceThreadId) =>
+                api.orchestration.dispatchCommand({
+                  type: "thread.archive",
+                  commandId: newCommandId(),
+                  threadId: sourceThreadId,
+                }),
+              ),
+          );
+          const archiveFailures = archiveResults.filter((result) => result.status === "rejected");
+          if (archiveFailures.length > 0) {
+            toastManager.add({
+              type: "error",
+              title: "Some source plans were not archived",
+              description: "Implementation started, but one or more comparison source threads could not be archived.",
+            });
+          }
+        }
         // Signal that the plan sidebar should open on the new thread.
         planSidebarOpenOnNextThreadRef.current = true;
         return navigate({
@@ -3562,6 +3620,7 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
     resetLocalDispatch,
     runtimeMode,
     selectedModelSelection,
+    hybridOrigin,
   ]);
 
   const onProviderModelSelect = useCallback(
@@ -4001,6 +4060,7 @@ export default function ChatView({ threadId, viewMode = "default" }: ChatViewPro
           onDeleteProjectScript={deleteProjectScript}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
+          onBackToComparison={hybridOrigin ? onBackToComparison : undefined}
         />
       </header>
 
